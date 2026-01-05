@@ -4,9 +4,10 @@ import numpy as np
 import io
 from pathlib import Path
 import pdfplumber
-import pandas as pd
 import re
-import matplotlib.pyplot as plt
+import torch
+
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # ==========================
 # PAGE CONFIG
@@ -19,7 +20,7 @@ st.set_page_config(
 )
 
 # ==========================
-# SESSION STATE FOR THEME
+# SESSION STATE
 # ==========================
 if "theme" not in st.session_state:
     st.session_state.theme = "light"
@@ -97,7 +98,7 @@ st.markdown(
 )
 
 # ==========================
-# LOAD MODELS
+# LOAD SVM & LR MODELS
 # ==========================
 @st.cache_resource
 def load_models():
@@ -105,34 +106,47 @@ def load_models():
     model_dir = base_dir / "save_models"
 
     svm_path = model_dir / "svm_linear_tfidf_model.joblib"
-    logreg_path = model_dir / "log_reg_tfidf_model.joblib"
+    lr_path = model_dir / "log_reg_tfidf_model.joblib"
     vec_path = model_dir / "tfidf_vectorizer.joblib"
 
-    missing = [p.name for p in [svm_path, logreg_path, vec_path] if not p.exists()]
-
-    if missing:
-        st.error("❌ Model tidak ditemukan:")
-        for m in missing:
-            st.code(f"save_models/{m}")
+    if not svm_path.exists() or not lr_path.exists() or not vec_path.exists():
+        st.error("❌ Model SVM / LR tidak ditemukan")
         st.stop()
 
     return (
         joblib.load(svm_path),
-        joblib.load(logreg_path),
-        joblib.load(vec_path),
+        joblib.load(lr_path),
+        joblib.load(vec_path)
     )
 
-# ==========================
-# INITIALIZE MODELS (FIX UTAMA)
-# ==========================
 svm_model, logreg_model, vectorizer = load_models()
+
+# ==========================
+# LOAD BERT (AUTO DOWNLOAD)
+# ==========================
+@st.cache_resource
+def load_bert():
+    model_name = "indobenchmark/indobert-base-p1"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name,
+        num_labels=6  # SESUAIKAN DENGAN JUMLAH KELAS
+    )
+    model.eval()
+    return tokenizer, model
+
+try:
+    bert_tokenizer, bert_model = load_bert()
+    bert_available = True
+except Exception:
+    bert_available = False
 
 # ==========================
 # TEXT PREPROCESSING
 # ==========================
 def simple_stem(word):
     prefixes = ["di", "ke", "me", "be", "ter", "per"]
-    suffixes = ["kan", "an", "i", "lah", "nya", "kah"]
+    suffixes = ["kan", "an", "i", "lah", "nya"]
 
     for p in prefixes:
         if word.startswith(p) and len(word) > len(p) + 2:
@@ -151,21 +165,41 @@ def preprocess_text(text):
     return " ".join(simple_stem(t) for t in tokens)
 
 # ==========================
-# CLASSIFICATION
+# SVM / LR CLASSIFICATION (FIXED)
 # ==========================
 def classify_text(text, model, vectorizer):
     processed = preprocess_text(text)
     X = vectorizer.transform([processed])
     pred = model.predict(X)[0]
 
-    prob = None
     if hasattr(model, "predict_proba"):
         prob = float(np.max(model.predict_proba(X)))
-    elif hasattr(model, "decision_function"):
-        d = model.decision_function(X)
+    else:
+        d = model.decision_function(X)[0]
         prob = float(1 / (1 + np.exp(-d)))
 
     return pred, prob
+
+# ==========================
+# BERT CLASSIFICATION
+# ==========================
+def classify_text_bert(text, tokenizer, model):
+    inputs = tokenizer(
+        text,
+        truncation=True,
+        padding=True,
+        max_length=512,
+        return_tensors="pt"
+    )
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=1)
+
+    pred_idx = torch.argmax(probs, dim=1).item()
+    confidence = probs[0][pred_idx].item()
+
+    return pred_idx, confidence
 
 # ==========================
 # FILE EXTRACTION
@@ -186,7 +220,7 @@ def extract_text(uploaded):
 st.markdown("""
 <div class="header-container">
     <h1>⚖️ Sistem Klasifikasi Putusan Perceraian</h1>
-    <p>Analisis otomatis alasan perceraian berbasis Machine Learning</p>
+    <p>Analisis otomatis alasan perceraian berbasis NLP</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -201,7 +235,7 @@ with st.sidebar:
 
     model_choice = st.selectbox(
         "Pilih Model",
-        ["SVM", "Logistic Regression"]
+        ["SVM", "Logistic Regression", "BERT (Auto-download)"]
     )
 
 uploaded = st.file_uploader(
@@ -214,8 +248,20 @@ if st.button("🔍 Mulai Klasifikasi"):
         st.error("❌ Silakan upload file terlebih dahulu")
     else:
         text = extract_text(uploaded)
-        model = svm_model if model_choice == "SVM" else logreg_model
-        pred, prob = classify_text(text, model, vectorizer)
+
+        if model_choice == "BERT (Auto-download)":
+            if not bert_available:
+                st.error("❌ Model BERT gagal dimuat")
+                st.stop()
+
+            pred, prob = classify_text_bert(
+                text,
+                bert_tokenizer,
+                bert_model
+            )
+        else:
+            model = svm_model if model_choice == "SVM" else logreg_model
+            pred, prob = classify_text(text, model, vectorizer)
 
         st.markdown('<div class="section-title">📌 Hasil Klasifikasi</div>', unsafe_allow_html=True)
         st.markdown(f"""
