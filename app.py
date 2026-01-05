@@ -21,11 +21,11 @@ st.set_page_config(
 # ==========================
 # SESSION STATE FOR THEME
 # ==========================
-if "theme" not in st.session_state:
-    st.session_state.theme = "light"
+if 'theme' not in st.session_state:
+    st.session_state.theme = 'light'
 
 # ==========================
-# CUSTOM CSS
+# CUSTOM CSS - LIGHT MODE
 # ==========================
 light_mode_css = """
 <style>
@@ -59,6 +59,9 @@ section[data-testid="stSidebar"] {
 </style>
 """
 
+# ==========================
+# CUSTOM CSS - DARK MODE
+# ==========================
 dark_mode_css = """
 <style>
 .stApp { background-color: #0f172a; color: #e5e7eb; }
@@ -91,13 +94,14 @@ section[data-testid="stSidebar"] {
 </style>
 """
 
+# Apply theme
 st.markdown(
     light_mode_css if st.session_state.theme == "light" else dark_mode_css,
     unsafe_allow_html=True
 )
 
 # ==========================
-# LOAD MODELS
+# LOAD MODEL & VECTORIZER
 # ==========================
 @st.cache_resource
 def load_models():
@@ -111,28 +115,31 @@ def load_models():
     missing = [p.name for p in [svm_path, logreg_path, vec_path] if not p.exists()]
 
     if missing:
-        st.error("❌ Model tidak ditemukan:")
+        st.error("❌ Model tidak ditemukan di server:")
         for m in missing:
             st.code(f"save_models/{m}")
-        st.stop()
+
+        st.info(
+            "Solusi:\n"
+            "1. Pastikan file `.joblib` di-push ke GitHub\n"
+            "2. Ukuran < 100MB\n"
+            "3. Redeploy & Clear cache di Streamlit Cloud"
+        )
+        return None, None, None
 
     return (
         joblib.load(svm_path),
         joblib.load(logreg_path),
-        joblib.load(vec_path),
+        joblib.load(vec_path)
     )
 
 # ==========================
-# INITIALIZE MODELS (FIX UTAMA)
-# ==========================
-svm_model, logreg_model, vectorizer = load_models()
-
-# ==========================
-# TEXT PREPROCESSING
+# SIMPLE STEMMER
 # ==========================
 def simple_stem(word):
-    prefixes = ["di", "ke", "me", "be", "ter", "per"]
-    suffixes = ["kan", "an", "i", "lah", "nya", "kah"]
+    word = word.lower()
+    prefixes = ['di', 'ke', 'me', 'be', 'ter', 'per']
+    suffixes = ['kan', 'an', 'i', 'lah', 'nya', 'kah']
 
     for p in prefixes:
         if word.startswith(p) and len(word) > len(p) + 2:
@@ -146,12 +153,29 @@ def simple_stem(word):
 
     return word
 
+
 def preprocess_text(text):
     tokens = re.findall(r"\b\w+\b", text.lower())
     return " ".join(simple_stem(t) for t in tokens)
 
 # ==========================
-# CLASSIFICATION
+# KATA KUNCI KATEGORI
+# ==========================
+KEYWORDS_BY_CATEGORY = {
+    "KDRT": ["aniaya", "pukul", "kekerasan", "tampar", "cekik"],
+    "Perselingkuhan": ["selingkuh", "zina", "wil"],
+    "Ekonomi": ["nafkah", "uang", "hutang", "penghasilan"],
+    "Pertengkaran": ["cekcok", "bertengkar", "ribut"],
+    "Pisah Rumah": ["pisah", "meninggalkan", "pulang"],
+    "Moral": ["judi", "mabuk", "narkoba"]
+}
+KEYWORDS_BY_CATEGORY = {
+    k: [simple_stem(w) for w in v]
+    for k, v in KEYWORDS_BY_CATEGORY.items()
+}
+
+# ==========================
+# KLASIFIKASI
 # ==========================
 def classify_text(text, model, vectorizer):
     processed = preprocess_text(text)
@@ -163,12 +187,13 @@ def classify_text(text, model, vectorizer):
         prob = float(np.max(model.predict_proba(X)))
     elif hasattr(model, "decision_function"):
         d = model.decision_function(X)
+        d = d[0] if isinstance(d, np.ndarray) else d
         prob = float(1 / (1 + np.exp(-d)))
 
     return pred, prob
 
 # ==========================
-# FILE EXTRACTION
+# EKSTRAK TEKS FILE
 # ==========================
 def extract_text(uploaded):
     if uploaded.name.endswith(".txt"):
