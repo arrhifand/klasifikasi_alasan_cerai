@@ -8,3 +8,5 @@ pdfplumber
 pillow
 pdfminer.six
 torch
+transformers
+sentencepiece
