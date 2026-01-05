@@ -115,21 +115,23 @@ def load_models():
     missing = [p.name for p in [svm_path, logreg_path, vec_path] if not p.exists()]
 
     if missing:
-        st.error(
-            "❌ File model tidak ditemukan:\n\n"
-            + "\n".join(f"- {m}" for m in missing)
-            + "\n\nPastikan file `.joblib` ada di folder `save_models/`."
+        st.error("❌ Model tidak ditemukan di server:")
+        for m in missing:
+            st.code(f"save_models/{m}")
+
+        st.info(
+            "Solusi:\n"
+            "1. Pastikan file `.joblib` di-push ke GitHub\n"
+            "2. Ukuran < 100MB\n"
+            "3. Redeploy & Clear cache di Streamlit Cloud"
         )
-        st.stop()
+        return None, None, None
 
-    svm_model = joblib.load(svm_path)
-    logreg_model = joblib.load(logreg_path)
-    vectorizer = joblib.load(vec_path)
-
-    return svm_model, logreg_model, vectorizer
-
-
-svm_model, logreg_model, vectorizer = load_models()
+    return (
+        joblib.load(svm_path),
+        joblib.load(logreg_path),
+        joblib.load(vec_path)
+    )
 
 # ==========================
 # SIMPLE STEMMER
